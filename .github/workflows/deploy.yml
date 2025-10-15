@@ -72,46 +72,53 @@ jobs:
         # 创建主 KV 命名空间
         echo "Creating main KV namespace: $KV_NAMESPACE_NAME"
         
-        # 尝试创建新的 KV 命名空间
-        KV_CREATE_OUTPUT=$(wrangler kv namespace create "$KV_NAMESPACE_NAME" --json 2>/dev/null || echo "failed")
-        
-        if [[ "$KV_CREATE_OUTPUT" == "failed" ]]; then
-          echo "ℹ️ KV namespace creation failed, checking existing namespaces..."
-          # 获取现有的 KV 命名空间列表
-          KV_LIST=$(wrangler kv namespace list --json)
-          KV_ID=$(echo "$KV_LIST" | jq -r --arg name "$KV_NAMESPACE_NAME" '.[] | select(.title == $name) | .id' | head -1)
-          
-          if [[ -n "$KV_ID" && "$KV_ID" != "null" ]]; then
-            echo "Found existing KV namespace ID: $KV_ID"
+        # 优先查找已存在的 KV 命名空间
+        KV_LIST=$(wrangler kv namespace list --json)
+        KV_ID=$(echo "$KV_LIST" | jq -r --arg name "$KV_NAMESPACE_NAME" '.[] | select(.title == $name) | .id' | head -1)
+
+        if [[ -z "$KV_ID" || "$KV_ID" == "null" ]]; then
+          echo "ℹ️ KV namespace not found, creating..."
+          if wrangler kv namespace create "$KV_NAMESPACE_NAME"; then
+            # 重新获取以读取实际 ID
+            KV_LIST=$(wrangler kv namespace list --json)
+            KV_ID=$(echo "$KV_LIST" | jq -r --arg name "$KV_NAMESPACE_NAME" '.[] | select(.title == $name) | .id' | head -1)
+            if [[ -n "$KV_ID" && "$KV_ID" != "null" ]]; then
+              echo "✅ Main KV namespace created with ID: $KV_ID"
+            else
+              echo "❌ Created KV namespace but could not retrieve ID"
+              exit 1
+            fi
           else
-            echo "❌ Could not find or create KV namespace"
+            echo "❌ Could not create KV namespace"
             exit 1
           fi
         else
-          echo "KV creation output: $KV_CREATE_OUTPUT"
-          KV_ID=$(echo "$KV_CREATE_OUTPUT" | jq -r '.id')
-          echo "✅ Main KV namespace created with ID: $KV_ID"
+          echo "Found existing KV namespace ID: $KV_ID"
         fi
         
         # 创建预览 KV 命名空间
         echo "Creating preview KV namespace: ${KV_NAMESPACE_NAME}_preview"
-        KV_PREVIEW_CREATE_OUTPUT=$(wrangler kv namespace create "${KV_NAMESPACE_NAME}_preview" --json 2>/dev/null || echo "failed")
-        
-        if [[ "$KV_PREVIEW_CREATE_OUTPUT" == "failed" ]]; then
-          echo "ℹ️ Preview KV namespace creation failed, checking existing namespaces..."
-          # 获取现有的预览 KV 命名空间
-          KV_PREVIEW_ID=$(echo "$KV_LIST" | jq -r --arg name "${KV_NAMESPACE_NAME}_preview" '.[] | select(.title == $name) | .id' | head -1)
-          
-          if [[ -n "$KV_PREVIEW_ID" && "$KV_PREVIEW_ID" != "null" ]]; then
-            echo "Found existing preview KV namespace ID: $KV_PREVIEW_ID"
+        # 先查找预览命名空间
+        KV_LIST=$(wrangler kv namespace list --json)
+        KV_PREVIEW_ID=$(echo "$KV_LIST" | jq -r --arg name "${KV_NAMESPACE_NAME}_preview" '.[] | select(.title == $name) | .id' | head -1)
+
+        if [[ -z "$KV_PREVIEW_ID" || "$KV_PREVIEW_ID" == "null" ]]; then
+          echo "ℹ️ Preview KV namespace not found, creating..."
+          if wrangler kv namespace create "${KV_NAMESPACE_NAME}_preview"; then
+            KV_LIST=$(wrangler kv namespace list --json)
+            KV_PREVIEW_ID=$(echo "$KV_LIST" | jq -r --arg name "${KV_NAMESPACE_NAME}_preview" '.[] | select(.title == $name) | .id' | head -1)
+            if [[ -n "$KV_PREVIEW_ID" && "$KV_PREVIEW_ID" != "null" ]]; then
+              echo "✅ Preview KV namespace created with ID: $KV_PREVIEW_ID"
+            else
+              echo "ℹ️ Could not retrieve preview KV ID, falling back to main KV ID"
+              KV_PREVIEW_ID="$KV_ID"
+            fi
           else
-            echo "ℹ️ Could not find preview KV namespace, using main KV ID"
+            echo "ℹ️ Could not create preview KV namespace, using main KV ID"
             KV_PREVIEW_ID="$KV_ID"
           fi
         else
-          echo "Preview KV creation output: $KV_PREVIEW_CREATE_OUTPUT"
-          KV_PREVIEW_ID=$(echo "$KV_PREVIEW_CREATE_OUTPUT" | jq -r '.id')
-          echo "✅ Preview KV namespace created with ID: $KV_PREVIEW_ID"
+          echo "Found existing preview KV namespace ID: $KV_PREVIEW_ID"
         fi
         
         # 验证 ID 不为空
