@@ -1,0 +1,181 @@
+name: Deploy FileCodeBox to Cloudflare Workers
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  # 资源名称（使用项目中生成的名称）
+  R2_BUCKET_NAME: "filecodebox-r2-f6bd1dfe"
+  R2_PREVIEW_BUCKET_NAME: "filecodebox-r2-f6bd1dfe-preview"
+  KV_NAMESPACE_NAME: "filecodebox-kv-2c88c777"
+
+jobs:
+  setup-and-deploy:
+    runs-on: ubuntu-latest
+    name: Setup Resources and Deploy
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Install Wrangler
+      run: npm install -g wrangler
+
+    - name: Authenticate with Cloudflare
+      run: |
+        echo "Setting up Cloudflare authentication..."
+        wrangler whoami
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    - name: Create R2 Buckets
+      run: |
+        echo "🪣 Creating R2 buckets..."
+        
+        # 创建主存储桶
+        echo "Creating main bucket: $R2_BUCKET_NAME"
+        if wrangler r2 bucket create "$R2_BUCKET_NAME" 2>/dev/null; then
+          echo "✅ Main bucket created successfully"
+        else
+          echo "ℹ️ Main bucket might already exist, continuing..."
+        fi
+        
+        # 创建预览存储桶
+        echo "Creating preview bucket: $R2_PREVIEW_BUCKET_NAME"
+        if wrangler r2 bucket create "$R2_PREVIEW_BUCKET_NAME" 2>/dev/null; then
+          echo "✅ Preview bucket created successfully"
+        else
+          echo "ℹ️ Preview bucket might already exist, continuing..."
+        fi
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    - name: Create KV Namespaces
+      id: create_kv
+      run: |
+        echo "🗄️ Creating KV namespaces..."
+        
+        # 创建主 KV 命名空间
+        echo "Creating main KV namespace: $KV_NAMESPACE_NAME"
+        KV_OUTPUT=$(wrangler kv:namespace create "$KV_NAMESPACE_NAME" 2>/dev/null || echo "exists")
+        
+        if [[ "$KV_OUTPUT" == "exists" ]]; then
+          echo "ℹ️ Main KV namespace might already exist"
+          # 尝试获取现有的 KV 命名空间列表
+          KV_LIST=$(wrangler kv:namespace list)
+          KV_ID=$(echo "$KV_LIST" | jq -r --arg name "$KV_NAMESPACE_NAME" '.[] | select(.title == $name) | .id' | head -1)
+          if [[ -n "$KV_ID" && "$KV_ID" != "null" ]]; then
+            echo "Found existing KV namespace ID: $KV_ID"
+            echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Could not find existing KV namespace"
+            exit 1
+          fi
+        else
+          echo "$KV_OUTPUT"
+          KV_ID=$(echo "$KV_OUTPUT" | grep -o 'id = "[^"]*"' | sed 's/id = "\(.*\)"/\1/')
+          echo "✅ Main KV namespace created with ID: $KV_ID"
+          echo "kv_id=$KV_ID" >> $GITHUB_OUTPUT
+        fi
+        
+        # 创建预览 KV 命名空间
+        echo "Creating preview KV namespace: $KV_NAMESPACE_NAME"
+        KV_PREVIEW_OUTPUT=$(wrangler kv:namespace create "$KV_NAMESPACE_NAME" --preview 2>/dev/null || echo "exists")
+        
+        if [[ "$KV_PREVIEW_OUTPUT" == "exists" ]]; then
+          echo "ℹ️ Preview KV namespace might already exist"
+          # 尝试获取现有的预览 KV 命名空间
+          KV_PREVIEW_ID=$(echo "$KV_LIST" | jq -r --arg name "${KV_NAMESPACE_NAME}_preview" '.[] | select(.title == $name) | .id' | head -1)
+          if [[ -n "$KV_PREVIEW_ID" && "$KV_PREVIEW_ID" != "null" ]]; then
+            echo "Found existing preview KV namespace ID: $KV_PREVIEW_ID"
+            echo "kv_preview_id=$KV_PREVIEW_ID" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ Could not find existing preview KV namespace, will use main KV ID"
+            echo "kv_preview_id=$KV_ID" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "$KV_PREVIEW_OUTPUT"
+          KV_PREVIEW_ID=$(echo "$KV_PREVIEW_OUTPUT" | grep -o 'preview_id = "[^"]*"' | sed 's/preview_id = "\(.*\)"/\1/')
+          if [[ -z "$KV_PREVIEW_ID" ]]; then
+            # 如果没有找到 preview_id，尝试提取 id
+            KV_PREVIEW_ID=$(echo "$KV_PREVIEW_OUTPUT" | grep -o 'id = "[^"]*"' | sed 's/id = "\(.*\)"/\1/')
+          fi
+          echo "✅ Preview KV namespace created with ID: $KV_PREVIEW_ID"
+          echo "kv_preview_id=$KV_PREVIEW_ID" >> $GITHUB_OUTPUT
+        fi
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    - name: Update wrangler.toml with KV IDs
+      run: |
+        echo "📝 Updating wrangler.toml with actual KV IDs..."
+        
+        KV_ID="${{ steps.create_kv.outputs.kv_id }}"
+        KV_PREVIEW_ID="${{ steps.create_kv.outputs.kv_preview_id }}"
+        
+        echo "Using KV ID: $KV_ID"
+        echo "Using KV Preview ID: $KV_PREVIEW_ID"
+        
+        # 替换占位符
+        sed -i "s/PLACEHOLDER_KV_ID/$KV_ID/g" wrangler.toml
+        sed -i "s/PLACEHOLDER_KV_PREVIEW_ID/$KV_PREVIEW_ID/g" wrangler.toml
+        
+        echo "✅ wrangler.toml updated successfully"
+        
+        # 显示更新后的配置
+        echo "Updated KV configuration:"
+        grep -A 3 "kv_namespaces" wrangler.toml
+
+    - name: Set up Secrets
+      run: |
+        echo "🔐 Setting up Cloudflare Workers secrets..."
+        
+        # 设置永久密码（如果提供）
+        if [[ -n "${{ secrets.PERMANENT_PASSWORD }}" ]]; then
+          echo "Setting PERMANENT_PASSWORD secret..."
+          echo "${{ secrets.PERMANENT_PASSWORD }}" | wrangler secret put PERMANENT_PASSWORD
+          echo "✅ PERMANENT_PASSWORD secret set"
+        else
+          echo "ℹ️ No PERMANENT_PASSWORD provided, using default"
+        fi
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    - name: Deploy to Cloudflare Workers
+      run: |
+        echo "🚀 Deploying to Cloudflare Workers..."
+        wrangler deploy
+        echo "✅ Deployment completed successfully!"
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    - name: Get deployment info
+      run: |
+        echo "📋 Deployment Information:"
+        echo "- R2 Bucket: $R2_BUCKET_NAME"
+        echo "- R2 Preview Bucket: $R2_PREVIEW_BUCKET_NAME"
+        echo "- KV Namespace: $KV_NAMESPACE_NAME"
+        echo "- KV ID: ${{ steps.create_kv.outputs.kv_id }}"
+        echo "- KV Preview ID: ${{ steps.create_kv.outputs.kv_preview_id }}"
+        
+        echo ""
+        echo "🌐 Your FileCodeBox is now deployed!"
+        echo "Visit your Cloudflare Workers dashboard to get the deployment URL."
