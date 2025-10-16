@@ -67,13 +67,15 @@ jobs:
     - name: Check API Token
       id: check_token
       run: |
-        if [[ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]]; then
-          echo "⚠️ CLOUDFLARE_API_TOKEN secret not configured"
+        if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
+          echo "⚠️ CLOUDFLARE_API_TOKEN environment variable not set"
           echo "has_token=false" >> $GITHUB_OUTPUT
         else
           echo "✅ CLOUDFLARE_API_TOKEN found"
           echo "has_token=true" >> $GITHUB_OUTPUT
         fi
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
     - name: Create KV Namespaces
       id: create_kv
@@ -98,6 +100,19 @@ jobs:
         # 创建主 KV 命名空间
         echo "Creating main KV namespace: $KV_NAMESPACE_NAME"
         
+        # 首先测试 wrangler 连接
+        echo "Testing wrangler connection..."
+        WHOAMI_OUTPUT=$(wrangler whoami 2>&1)
+        WHOAMI_EXIT_CODE=$?
+        echo "Whoami exit code: $WHOAMI_EXIT_CODE"
+        echo "Whoami output: $WHOAMI_OUTPUT"
+        
+        if [[ $WHOAMI_EXIT_CODE -ne 0 ]]; then
+          echo "❌ Wrangler authentication failed"
+          echo "Please check your API token and account ID"
+          exit 1
+        fi
+        
         # 尝试创建新的 KV 命名空间
         echo "Attempting to create KV namespace..."
         KV_CREATE_OUTPUT=$(wrangler kv namespace create "$KV_NAMESPACE_NAME" 2>&1)
@@ -105,6 +120,19 @@ jobs:
         
         echo "KV creation exit code: $KV_CREATE_EXIT_CODE"
         echo "KV creation output: $KV_CREATE_OUTPUT"
+        
+        # 如果创建失败，显示更详细的错误信息
+        if [[ $KV_CREATE_EXIT_CODE -ne 0 ]]; then
+          echo "❌ KV namespace creation failed with detailed error:"
+          echo "Command: wrangler kv namespace create $KV_NAMESPACE_NAME"
+          echo "Exit code: $KV_CREATE_EXIT_CODE"
+          echo "Full output: $KV_CREATE_OUTPUT"
+          echo ""
+          echo "🔍 Debugging information:"
+          echo "- API Token present: $([ -n "$CLOUDFLARE_API_TOKEN" ] && echo "Yes" || echo "No")"
+          echo "- Account ID present: $([ -n "$CLOUDFLARE_ACCOUNT_ID" ] && echo "Yes" || echo "No")"
+          echo "- Wrangler version: $(wrangler --version 2>/dev/null || echo "Unknown")"
+        fi
         
         if [[ $KV_CREATE_EXIT_CODE -eq 0 ]]; then
           # 从标准输出中提取 ID (格式: id = "namespace_id")
