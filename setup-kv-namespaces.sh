@@ -26,19 +26,33 @@ echo "✅ 找到 API token，開始創建 KV namespaces..."
 
 # 創建主要 KV namespace
 echo "創建主要 KV namespace: filecodebox-kv-2c88c777"
-MAIN_KV_OUTPUT=$(npx wrangler kv namespace create "filecodebox-kv-2c88c777" 2>&1)
+MAIN_KV_OUTPUT=$(npx wrangler kv namespace create filecodebox-kv-2c88c777 2>&1)
+MAIN_KV_EXIT_CODE=$?
 echo "$MAIN_KV_OUTPUT"
 
-# 從輸出中提取 namespace ID
-MAIN_KV_ID=$(echo "$MAIN_KV_OUTPUT" | grep -o 'id = "[^"]*"' | head -1 | sed 's/id = "\(.*\)"/\1/')
+if [ $MAIN_KV_EXIT_CODE -ne 0 ]; then
+    echo "❌ 主要 KV namespace 創建失敗"
+    echo "錯誤輸出: $MAIN_KV_OUTPUT"
+    exit 1
+fi
+
+# 從輸出中提取 namespace ID (wrangler 輸出格式: binding = "BINDING_NAME" id = "namespace_id")
+MAIN_KV_ID=$(echo "$MAIN_KV_OUTPUT" | grep -o 'id = "[^"]*"' | sed 's/id = "\(.*\)"/\1/')
 
 # 創建預覽 KV namespace  
 echo "創建預覽 KV namespace: filecodebox-kv-2c88c777-preview"
-PREVIEW_KV_OUTPUT=$(npx wrangler kv namespace create "filecodebox-kv-2c88c777" --preview 2>&1)
+PREVIEW_KV_OUTPUT=$(npx wrangler kv namespace create filecodebox-kv-2c88c777-preview --preview 2>&1)
+PREVIEW_KV_EXIT_CODE=$?
 echo "$PREVIEW_KV_OUTPUT"
 
+if [ $PREVIEW_KV_EXIT_CODE -ne 0 ]; then
+    echo "❌ 預覽 KV namespace 創建失敗"
+    echo "錯誤輸出: $PREVIEW_KV_OUTPUT"
+    exit 1
+fi
+
 # 從輸出中提取預覽 namespace ID
-PREVIEW_KV_ID=$(echo "$PREVIEW_KV_OUTPUT" | grep -o 'preview_id = "[^"]*"' | head -1 | sed 's/preview_id = "\(.*\)"/\1/')
+PREVIEW_KV_ID=$(echo "$PREVIEW_KV_OUTPUT" | grep -o 'preview_id = "[^"]*"' | sed 's/preview_id = "\(.*\)"/\1/')
 
 echo ""
 echo "📝 請更新 wrangler.toml 文件中的以下配置："
