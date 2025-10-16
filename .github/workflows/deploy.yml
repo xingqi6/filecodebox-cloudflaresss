@@ -64,10 +64,36 @@ jobs:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+    - name: Check API Token
+      id: check_token
+      run: |
+        if [[ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]]; then
+          echo "⚠️ CLOUDFLARE_API_TOKEN secret not configured"
+          echo "has_token=false" >> $GITHUB_OUTPUT
+        else
+          echo "✅ CLOUDFLARE_API_TOKEN found"
+          echo "has_token=true" >> $GITHUB_OUTPUT
+        fi
+
     - name: Create KV Namespaces
       id: create_kv
       run: |
         echo "🗄️ Creating KV namespaces..."
+        
+        # 检查是否有 API token
+        if [[ "${{ steps.check_token.outputs.has_token }}" != "true" ]]; then
+          echo "❌ No Cloudflare API token available"
+          echo "📋 To complete setup, please:"
+          echo "1. Go to GitHub repository Settings > Secrets and variables > Actions"
+          echo "2. Add CLOUDFLARE_API_TOKEN secret with your Cloudflare API token"
+          echo "3. Add CLOUDFLARE_ACCOUNT_ID secret with your Cloudflare Account ID"
+          echo "4. Re-run this workflow"
+          echo ""
+          echo "🔧 For manual setup, use these placeholder IDs:"
+          echo "kv_id=MANUAL_SETUP_REQUIRED" >> $GITHUB_OUTPUT
+          echo "kv_preview_id=MANUAL_SETUP_REQUIRED" >> $GITHUB_OUTPUT
+          exit 0
+        fi
         
         # 创建主 KV 命名空间
         echo "Creating main KV namespace: $KV_NAMESPACE_NAME"
@@ -77,8 +103,10 @@ jobs:
         KV_CREATE_OUTPUT=$(wrangler kv namespace create "$KV_NAMESPACE_NAME" 2>&1)
         KV_CREATE_EXIT_CODE=$?
         
+        echo "KV creation exit code: $KV_CREATE_EXIT_CODE"
+        echo "KV creation output: $KV_CREATE_OUTPUT"
+        
         if [[ $KV_CREATE_EXIT_CODE -eq 0 ]]; then
-          echo "KV creation output: $KV_CREATE_OUTPUT"
           # 从标准输出中提取 ID (格式: id = "namespace_id")
           KV_ID=$(echo "$KV_CREATE_OUTPUT" | grep -o 'id = "[^"]*"' | sed 's/id = "\(.*\)"/\1/')
           
@@ -94,12 +122,12 @@ jobs:
               echo "Found existing KV namespace ID: $KV_ID"
             else
               echo "❌ Could not find or create KV namespace"
+              echo "Please check your Cloudflare API token permissions"
               exit 1
             fi
           fi
         else
           echo "ℹ️ KV namespace creation failed, checking existing namespaces..."
-          echo "Error output: $KV_CREATE_OUTPUT"
           
           # 获取现有的 KV 命名空间列表
           KV_LIST=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
@@ -109,7 +137,7 @@ jobs:
             echo "Found existing KV namespace ID: $KV_ID"
           else
             echo "❌ Could not find or create KV namespace"
-            echo "Please check your Cloudflare API token permissions"
+            echo "Please check your Cloudflare API token permissions or create manually"
             exit 1
           fi
         fi
@@ -119,8 +147,10 @@ jobs:
         KV_PREVIEW_CREATE_OUTPUT=$(wrangler kv namespace create "${KV_NAMESPACE_NAME}-preview" --preview 2>&1)
         KV_PREVIEW_EXIT_CODE=$?
         
+        echo "Preview KV creation exit code: $KV_PREVIEW_EXIT_CODE"
+        echo "Preview KV creation output: $KV_PREVIEW_CREATE_OUTPUT"
+        
         if [[ $KV_PREVIEW_EXIT_CODE -eq 0 ]]; then
-          echo "Preview KV creation output: $KV_PREVIEW_CREATE_OUTPUT"
           # 从标准输出中提取预览 ID (格式: preview_id = "namespace_id")
           KV_PREVIEW_ID=$(echo "$KV_PREVIEW_CREATE_OUTPUT" | grep -o 'preview_id = "[^"]*"' | sed 's/preview_id = "\(.*\)"/\1/')
           
@@ -132,7 +162,6 @@ jobs:
           fi
         else
           echo "ℹ️ Preview KV namespace creation failed, checking existing namespaces..."
-          echo "Error output: $KV_PREVIEW_CREATE_OUTPUT"
           
           # 获取现有的预览 KV 命名空间
           KV_LIST=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
@@ -175,6 +204,58 @@ jobs:
         
         echo "Using KV ID: $KV_ID"
         echo "Using KV Preview ID: $KV_PREVIEW_ID"
+        
+        # 检查是否需要手动设置
+        if [[ "$KV_ID" == "MANUAL_SETUP_REQUIRED" ]]; then
+          echo "⚠️ Manual KV setup required"
+          echo "📋 Please manually create KV namespaces and update wrangler.toml:"
+          echo "1. Run: npx wrangler kv namespace create filecodebox-kv-2c88c777"
+          echo "2. Run: npx wrangler kv namespace create filecodebox-kv-2c88c777-preview --preview"
+          echo "3. Update wrangler.toml with the returned IDs"
+          echo "4. Deploy manually: npx wrangler deploy"
+          
+          # 创建一个包含说明的文件
+          cat > MANUAL_SETUP_INSTRUCTIONS.md << 'EOF'
+        # Manual Setup Required
+        
+        The automatic setup could not complete because Cloudflare API credentials are not configured.
+        
+        ## Steps to complete setup:
+        
+        ### 1. Configure GitHub Secrets (Recommended)
+        Add these secrets to your GitHub repository (Settings > Secrets and variables > Actions):
+        - `CLOUDFLARE_API_TOKEN`: Your Cloudflare API token
+        - `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID
+        
+        Then re-run the GitHub Action.
+        
+        ### 2. Manual Setup (Alternative)
+        If you prefer to set up manually:
+        
+        ```bash
+        # Set your API token
+        export CLOUDFLARE_API_TOKEN=your_token_here
+        
+        # Create KV namespaces
+        npx wrangler kv namespace create filecodebox-kv-2c88c777
+        npx wrangler kv namespace create filecodebox-kv-2c88c777-preview --preview
+        
+        # Update wrangler.toml with the returned IDs
+        # Replace PLACEHOLDER_KV_ID and PLACEHOLDER_KV_PREVIEW_ID
+        
+        # Deploy
+        npx wrangler deploy
+        ```
+        
+        ## Getting Cloudflare Credentials
+        
+        1. **API Token**: Go to [Cloudflare API Tokens](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/)
+        2. **Account ID**: Found in your Cloudflare dashboard sidebar
+        EOF
+          
+          echo "📄 Created MANUAL_SETUP_INSTRUCTIONS.md with detailed instructions"
+          exit 0
+        fi
         
         # 验证 ID 不为空
         if [[ -z "$KV_ID" || "$KV_ID" == "null" ]]; then
@@ -234,6 +315,13 @@ jobs:
 
     - name: Deploy to Cloudflare Workers
       run: |
+        # 检查是否需要手动设置
+        if [[ "${{ steps.create_kv.outputs.kv_id }}" == "MANUAL_SETUP_REQUIRED" ]]; then
+          echo "⏭️ Skipping deployment - manual setup required"
+          echo "Please complete the manual setup steps and then deploy manually"
+          exit 0
+        fi
+        
         echo "🚀 Deploying to Cloudflare Workers..."
         wrangler deploy
         echo "✅ Deployment completed successfully!"
