@@ -115,23 +115,55 @@ jobs:
         
         # 尝试创建新的 KV 命名空间
         echo "Attempting to create KV namespace..."
-        KV_CREATE_OUTPUT=$(wrangler kv namespace create "$KV_NAMESPACE_NAME" 2>&1)
+        
+        # 使用更详细的输出捕获
+        set +e  # 暂时禁用错误退出
+        KV_CREATE_OUTPUT=$(wrangler kv namespace create "$KV_NAMESPACE_NAME" --verbose 2>&1)
         KV_CREATE_EXIT_CODE=$?
+        set -e  # 重新启用错误退出
         
         echo "KV creation exit code: $KV_CREATE_EXIT_CODE"
-        echo "KV creation output: $KV_CREATE_OUTPUT"
+        echo "KV creation output:"
+        echo "$KV_CREATE_OUTPUT"
         
-        # 如果创建失败，显示更详细的错误信息
+        # 如果创建失败，显示更详细的错误信息和可能的解决方案
         if [[ $KV_CREATE_EXIT_CODE -ne 0 ]]; then
-          echo "❌ KV namespace creation failed with detailed error:"
-          echo "Command: wrangler kv namespace create $KV_NAMESPACE_NAME"
-          echo "Exit code: $KV_CREATE_EXIT_CODE"
-          echo "Full output: $KV_CREATE_OUTPUT"
           echo ""
-          echo "🔍 Debugging information:"
-          echo "- API Token present: $([ -n "$CLOUDFLARE_API_TOKEN" ] && echo "Yes" || echo "No")"
-          echo "- Account ID present: $([ -n "$CLOUDFLARE_ACCOUNT_ID" ] && echo "Yes" || echo "No")"
+          echo "❌ KV namespace creation failed with detailed error:"
+          echo "Command: wrangler kv namespace create $KV_NAMESPACE_NAME --verbose"
+          echo "Exit code: $KV_CREATE_EXIT_CODE"
+          echo ""
+          echo "🔍 Error Analysis:"
+          
+          # 分析常见错误类型
+          if echo "$KV_CREATE_OUTPUT" | grep -i "permission\|forbidden\|unauthorized"; then
+            echo "- ❌ Permission Error: API token lacks required permissions"
+            echo "- 💡 Solution: Recreate API token with 'Cloudflare Workers:Edit' permission"
+          elif echo "$KV_CREATE_OUTPUT" | grep -i "account"; then
+            echo "- ❌ Account Error: Account ID may be required or invalid"
+            echo "- 💡 Solution: Set CLOUDFLARE_ACCOUNT_ID in GitHub secrets"
+          elif echo "$KV_CREATE_OUTPUT" | grep -i "limit\|quota"; then
+            echo "- ❌ Quota Error: Account has reached KV namespace limit"
+            echo "- 💡 Solution: Delete unused KV namespaces or upgrade plan"
+          elif echo "$KV_CREATE_OUTPUT" | grep -i "network\|timeout\|connection"; then
+            echo "- ❌ Network Error: Connection to Cloudflare API failed"
+            echo "- 💡 Solution: Retry the operation"
+          else
+            echo "- ❓ Unknown Error: Check full output above"
+          fi
+          
+          echo ""
+          echo "🔧 Debugging Information:"
+          echo "- API Token present: $([ -n "$CLOUDFLARE_API_TOKEN" ] && echo "Yes (${#CLOUDFLARE_API_TOKEN} chars)" || echo "No")"
+          echo "- Account ID present: $([ -n "$CLOUDFLARE_ACCOUNT_ID" ] && echo "Yes (${#CLOUDFLARE_ACCOUNT_ID} chars)" || echo "No")"
           echo "- Wrangler version: $(wrangler --version 2>/dev/null || echo "Unknown")"
+          
+          echo ""
+          echo "🆘 Recommended Actions:"
+          echo "1. Check API token permissions at: https://dash.cloudflare.com/profile/api-tokens"
+          echo "2. Ensure token has 'Cloudflare Workers:Edit' permission"
+          echo "3. Add CLOUDFLARE_ACCOUNT_ID to GitHub secrets if not present"
+          echo "4. Try manual setup using: ./deploy-local.sh"
         fi
         
         if [[ $KV_CREATE_EXIT_CODE -eq 0 ]]; then
